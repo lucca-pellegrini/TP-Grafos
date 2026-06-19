@@ -101,7 +101,7 @@ def main():
         )
 
     print(f"\n[5/5] Comparison results:")
-    compare_methods(results)
+    compare_methods(results, nodes_df=graph["nodes"])
 
     print("\nDone.")
 
