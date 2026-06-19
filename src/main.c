@@ -45,6 +45,7 @@ int main(int argc, char **argv)
 	int do_exact = 0;
 	int do_compare = 0;
 	const char *csv_out = NULL;
+	const char *graph_dir = NULL;
 
 	// TODO: usar getopt_long no lugar dessa atrocidade ofensiva!
 	for (int i = 1; i < argc; i++) {
@@ -58,6 +59,9 @@ int main(int argc, char **argv)
 			do_compare = 1;
 		} else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
 			csv_out = argv[++i];
+		} else if ((strcmp(argv[i], "--graph") == 0 || strcmp(argv[i], "-g") == 0) &&
+			   i + 1 < argc) {
+			graph_dir = argv[++i];
 		} else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
 			printf("Usage: %s [options]\n", argv[0]);
 			printf("  -k N        Samples for betweenness (default: sqrt(|V|))\n");
@@ -65,6 +69,7 @@ int main(int argc, char **argv)
 			printf("  --exact     Use exact betweenness (Brandes, O(VE))\n");
 			printf("  --compare   Compare approximate vs exact + timing\n");
 			printf("  -o FILE     Output all scores as CSV\n");
+			printf("  -g DIR      Load graph from CSR binary directory\n");
 			return 0;
 		}
 	}
@@ -79,7 +84,11 @@ int main(int argc, char **argv)
 
 	// Instancia o grafo.
 	double t0 = wall_clock();
-	struct graph g = graph_load();
+	struct graph g = graph_dir ? graph_load_from(graph_dir) : graph_load();
+	if (g.n == 0) {
+		fprintf(stderr, "Failed to load graph\n");
+		return 1;
+	}
 	double t_load = wall_clock() - t0;
 	printf("Graph loaded: %d nodes, %d edges (%.4fs)\n\n", g.n, g.m, t_load);
 
@@ -205,11 +214,11 @@ int main(int argc, char **argv)
 			fprintf(stderr, "Cannot open %s for writing\n", csv_out);
 		} else {
 			fprintf(fp,
-				"rank,iata,name,city,country,degree,interconnectivity,betweenness,score\n");
+				"node_idx,rank,iata,name,city,country,degree,interconnectivity,betweenness,score\n");
 			for (int i = 0; i < g.n; i++) {
 				int v = ranking[i];
-				fprintf(fp, "%d,%s,%s,%s,%s,%.6f,%.6f,%.6f,%.6f\n", i + 1,
-					g.iata[v], g.name[v], g.city[v], g.country[v],
+				fprintf(fp, "%d,%d,%s,\"%s\",\"%s\",\"%s\",%.6f,%.6f,%.6f,%.6f\n",
+					v, i + 1, g.iata[v], g.name[v], g.city[v], g.country[v],
 					features[v].degree, features[v].interconnect,
 					features[v].betweenness, features[v].score);
 			}
@@ -244,6 +253,7 @@ int main(int argc, char **argv)
 		printf("\n");
 	}
 
+	graph_free(&g);
 	free(degree);
 	free(interconnect);
 	free(betweenness_approx);

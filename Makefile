@@ -18,6 +18,11 @@ GEN_DIR := $(OUT_DIR)/gen
 # Dataset paths
 DATA_DIR := openflights-datasets/data
 
+# GNN Python module
+GNN_DIR  := gnn
+GNN_VENV := $(OUT_DIR)/venv
+GNN_BIN  := $(GNN_VENV)/bin
+
 
 ## Tools configuration
 
@@ -93,8 +98,14 @@ help:
 	@echo
 	@echo "Possible targets:"
 	@echo "  all           Build the binary at ‘./<OUT_DIR>/airnet-gnn’."
-	@echo "  preprocess    Generate ‘build/gen/graph_data.h’ from OpenFlights datasets."
+	@echo "  preprocess    Generate ‘build/gen/graph_data.h’ + CSR from OpenFlights."
 	@echo "  clean         Clean up all build artifacts."
+	@echo "  run           Run classical analysis with compiled-in graph."
+	@echo "  run-csr       Run classical analysis with CSR-loaded graph."
+	@echo "  gnn-env       Create Python venv with PyTorch Geometric (uv)."
+	@echo "  gnn-graph     Generate random graphs (ER, BA, WS) for training."
+	@echo "  gnn-run       Run full GNN comparison pipeline."
+	@echo "  compare       Full pipeline: preprocess + classical + GNN comparison."
 	@echo "  help          Display this help page."
 	@echo
 	@echo "Options:"
@@ -107,12 +118,14 @@ help:
 	@echo "  INC_DIR       Directory containing header files."
 
 
-## Generated graph data header
+## Generated graph data header and CSR binary for Python
 
-$(GEN_DIR)/graph_data.h: scripts/preprocess.pl $(DATA_DIR)/airports.dat $(DATA_DIR)/routes.dat | $(GEN_DIR)
-	perl $< $(DATA_DIR) > $@
+CSR_DIR := $(GEN_DIR)/csr/openflights
 
-preprocess: $(GEN_H)
+$(GEN_DIR)/graph_data.h $(CSR_DIR)/graph.meta: scripts/preprocess.pl $(DATA_DIR)/airports.dat $(DATA_DIR)/routes.dat | $(GEN_DIR)
+	perl $< --csr-out $(CSR_DIR) $(DATA_DIR) > $(GEN_DIR)/graph_data.h
+
+preprocess: $(GEN_H) $(CSR_DIR)/graph.meta
 
 
 ## Normal compilation rules
@@ -141,6 +154,36 @@ clean:
 run: $(BIN)
 	$<
 
-.PHONY: all bin help clean preprocess run
+run-csr: $(BIN) $(CSR_DIR)/graph.meta
+	$< --graph $(CSR_DIR)
+
+
+## GNN targets
+
+$(GNN_DIR)/requirements.txt:
+	@echo "No requirements.txt found in $(GNN_DIR)" >&2; exit 1
+
+$(GNN_VENV)/pyvenv.cfg: $(GNN_DIR)/requirements.txt | $(OUT_DIR)
+	test -d $(GNN_VENV) || uv venv $(GNN_VENV)
+	. $(GNN_BIN)/activate && uv pip install -r $(GNN_DIR)/requirements.txt
+
+gnn-env: $(GNN_VENV)/pyvenv.cfg
+
+gnn-graph: $(GNN_VENV)/pyvenv.cfg
+	. $(GNN_BIN)/activate && uv run python $(GNN_DIR)/generate_graph.py $(GEN_DIR)/csr
+
+CLASSICAL_CSV := $(OUT_DIR)/classical_scores.csv
+
+$(CLASSICAL_CSV): $(BIN) $(CSR_DIR)/graph.meta
+	$(BIN) --graph $(CSR_DIR) -o $(CLASSICAL_CSV)
+
+gnn-run: $(GNN_VENV)/pyvenv.cfg $(CLASSICAL_CSV)
+	. $(GNN_BIN)/activate && uv run python $(GNN_DIR)/run.py $(CSR_DIR) \
+		--classical-csv $(CLASSICAL_CSV)
+
+# Full compare pipeline: preprocess, build classical binary, run comparison
+compare: preprocess $(BIN) gnn-run
+
+.PHONY: all bin help clean preprocess run run-csr gnn-env gnn-graph gnn-run compare
 
 -include $(DEPS)

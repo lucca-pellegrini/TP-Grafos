@@ -3,14 +3,32 @@
 # SPDX-License-Identifier: ISC
 # SPDX-FileCopyrightText: Copyright © 2026 Lucca M. A. Pellegrini <lucca@verticordia.com>
 
-# Script auxiliar para ler os datasets do OpenFlights e gerar um cabeçalho com
-# o grafo para inclusão no programa principal. Lê diretório como primeiro e
-# único argumento, gera um `.h` (espero que válido!) em stdout.
+# Script auxiliar para ler os datasets do OpenFlights e gerar:
+#   1. (stdout) Cabeçalho C com o grafo como constantes estáticas
+#   2. (--csr-out) Diretório com formato CSR binário para Python/C dinâmico
+# Lê diretório como último argumento.
 
 use strict;
 use warnings;
 
-my $data_dir = shift // die "Usage: $0 <data_dir>\n";
+use File::Path qw(make_path);
+
+my $csr_out = undef;
+my $data_dir;
+
+while (@ARGV) {
+    my $arg = shift;
+    if ($arg eq '--csr-out' && @ARGV) {
+        $csr_out = shift;
+    } else {
+        $data_dir = $arg;
+        last;
+    }
+}
+
+$data_dir //= shift @ARGV;
+
+die "Usage: $0 [--csr-out <dir>] <data_dir>\n" unless defined $data_dir;
 
 my $airports_file = "$data_dir/airports.dat";
 my $routes_file   = "$data_dir/routes.dat";
@@ -178,6 +196,54 @@ warn "graph:        $n nodes, $m edges\n";
 warn "avg degree:   " . sprintf("%.2f", $sum_deg / $n) . "\n";
 warn "max degree:   $max_deg\n";
 
+
+## Serializa o grafo em formato CSR binário (para Python / C dinâmico)
+
+if (defined $csr_out) {
+    make_path($csr_out) unless -d $csr_out;
+
+    # Metadados: n, m, nome, direcionado
+    open my $mfh, '>:utf8', "$csr_out/graph.meta"
+        or die "Cannot write $csr_out/graph.meta: $!\n";
+    print $mfh "$n\n$m\nopenflights\n1\n"; # 1 = directed
+    close $mfh;
+
+    # Offsets: (n+1) × int32 little-endian
+    open my $ofh, '>:raw', "$csr_out/offsets.bin"
+        or die "Cannot write $csr_out/offsets.bin: $!\n";
+    for my $i (0 .. $n) {
+        print $ofh pack('V', $offsets[$i]);
+    }
+    close $ofh;
+
+    # Edges: m × int32 little-endian
+    open my $efh, '>:raw', "$csr_out/edges.bin"
+        or die "Cannot write $csr_out/edges.bin: $!\n";
+    for my $e (@edges) {
+        print $efh pack('V', $e->[1]); # destination only, same as C CSR
+    }
+    close $efh;
+
+    # Metadados dos nós: iata,name,city,country (CSV)
+    open my $nvfh, '>:utf8', "$csr_out/nodes.csv"
+        or die "Cannot write $csr_out/nodes.csv: $!\n";
+    print $nvfh "iata,name,city,country\n";
+    for my $i (0 .. $n - 1) {
+        my $id = $node_ids[$i];
+        my $iata    = $airport{$id}{iata};
+        my $name    = $airport{$id}{name};
+        my $city    = $airport{$id}{city};
+        my $country = $airport{$id}{country};
+        # Quote fields that may contain commas
+        $name    = qq("$name")    if $name    =~ /,/;
+        $city    = qq("$city")    if $city    =~ /,/;
+        $country = qq("$country") if $country =~ /,/;
+        printf $nvfh "%s,%s,%s,%s\n", $iata, $name, $city, $country;
+    }
+    close $nvfh;
+
+    warn "CSR binary written to $csr_out/\n";
+}
 
 ## Gera o cabeçalho fonte em C, rezando para estar válido.
 
